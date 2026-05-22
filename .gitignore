@@ -10,7 +10,6 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 *.tfvars
-!portal/terraform/terraform.tfvars
 
 # Azure Functions
 portal/functions.zip
