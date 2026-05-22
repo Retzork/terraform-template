@@ -1,0 +1,36 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform.lock.hcl
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.tfvars
+!portal/terraform/terraform.tfvars
+
+# Azure Functions
+portal/functions.zip
+__pycache__/
+*.pyc
+.python_packages/
+.funcignore
+local.settings.json
+
+# Logs
+*.log
+portal/temp-log.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
