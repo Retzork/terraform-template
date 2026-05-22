@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terraform Deployment Portal</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>&#9729; Terraform Deployment Portal</h1>
+            <p class="subtitle">Select a template to deploy Azure infrastructure</p>
+        </header>
+
+        <div class="search-section">
+            <h3>Track Existing Deployment</h3>
+            <div class="input-with-button">
+                <input type="text" id="search-deploy-id" placeholder="Enter deployment ID (e.g. 01-deploy-20260522...)">
+                <button class="btn btn-secondary btn-sm" onclick="searchDeployment()">View Logs</button>
+            </div>
+            <p class="search-hint">Have a deployment ID? Enter it here to check status and logs.</p>
+        </div>
+
+        <div class="nav-links">
+            <a href="resources.html" class="btn btn-secondary">&#128269; Resource Checker</a>
+        </div>
+
+        <div class="templates" id="templates">
+            <div class="template-card" onclick="selectTemplate('01')">
+                <div class="template-icon">&#128187;</div>
+                <h2>01 - Windows SQL Server</h2>
+                <p>Standalone Windows VM with SQL Server 2017 Developer. Includes data and log disks, NSG with RDP access, and custom user creation.</p>
+                <ul>
+                    <li>Windows Server 2019</li>
+                    <li>SQL Server 2017 Developer</li>
+                    <li>Customizable disk sizing</li>
+                    <li>Public IP + RDP (office only)</li>
+                </ul>
+                <button class="btn">Deploy &rarr;</button>
+            </div>
+
+            <div class="template-card" onclick="selectTemplate('02')">
+                <div class="template-icon">&#128202;</div>
+                <h2>02 - Windows SQL + Dynamics GP</h2>
+                <p>Single VM with SQL Server and Dynamics GP 2018 pre-installed from a custom image. All-in-one solution.</p>
+                <ul>
+                    <li>Dynamics GP 2018 pre-installed</li>
+                    <li>SQL Server with Mixed Mode</li>
+                    <li>ODBC DSN auto-configured</li>
+                    <li>Public IP + RDP (office only)</li>
+                </ul>
+                <button class="btn">Deploy &rarr;</button>
+            </div>
+        </div>
+
+        <div class="guide">
+            <h3>How it works</h3>
+            <ol>
+                <li><strong>Pick a template</strong> &mdash; Choose the infrastructure you need</li>
+                <li><strong>Fill the form</strong> &mdash; Customize sizing, credentials, and region</li>
+                <li><strong>Deploy</strong> &mdash; Terraform runs serverlessly in the background</li>
+                <li><strong>Monitor</strong> &mdash; Refresh the log page to see real-time progress</li>
+                <li><strong>Save your Deployment ID</strong> &mdash; Use it to track, manage, or destroy your resources later</li>
+            </ol>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deployment Logs</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <a href="index.html" class="back-link">&larr; Back to templates</a>
+            <h1>Deployment Logs</h1>
+        </header>
+
+        <div class="log-header">
+            <div class="log-meta">
+                <p><strong>Deployment ID:</strong> <code id="deploy-id">-</code></p>
+                <p><strong>Template:</strong> <span id="template-name">-</span></p>
+                <p><strong>Status:</strong> <span id="status-badge" class="badge">-</span></p>
+                <p><strong>Started:</strong> <span id="started-at">-</span></p>
+            </div>
+            <div class="log-actions">
+                <button class="btn btn-secondary" onclick="refreshLogs()">&#8635; Refresh</button>
+                <button class="btn btn-danger" id="destroy-btn" onclick="confirmDestroy()" style="display:none;">&#128465; Destroy</button>
+            </div>
+        </div>
+
+        <div class="deploy-id-notice">
+            <p>&#128204; Save your Deployment ID: <code id="deploy-id-copy">-</code> &mdash; use it to track your resources on the <a href="resources.html">Resource Checker</a> page.</p>
+        </div>
+
+        <!-- Outputs section (shown above logs when complete) -->
+        <div id="outputs-section" style="display:none;">
+            <h3>&#10003; Deployment Outputs</h3>
+            <table class="outputs-table" id="outputs-table">
+                <thead><tr><th>Key</th><th>Value</th></tr></thead>
+                <tbody id="outputs-body"></tbody>
+            </table>
+        </div>
+
+        <div class="refresh-notice" id="refresh-notice">
+            <p>&#9432; Logs update in real-time. Click <strong>Refresh</strong> to get the latest output.</p>
+        </div>
+
+        <!-- Collapsible log section -->
+        <div id="log-section">
+            <div class="log-toggle" id="log-toggle" onclick="toggleLog()" style="display:none;">
+                <span id="log-toggle-icon">&#9660;</span> <strong>Terraform Output</strong> <span class="log-toggle-hint">(click to expand)</span>
+            </div>
+            <div class="log-output" id="log-output">
+                <p class="log-placeholder">Loading logs...</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const params = new URLSearchParams(window.location.search);
+            const deployId = params.get('id');
+            if (deployId) {
+                document.getElementById('deploy-id').textContent = deployId;
+                document.getElementById('deploy-id-copy').textContent = deployId;
+                refreshLogs();
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resource Checker</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <a href="index.html" class="back-link">&larr; Back to templates</a>
+            <h1>&#128269; Resource Checker</h1>
+            <p class="subtitle">Check the status of your deployed resources using your Deployment ID</p>
+        </header>
+
+        <div class="checker-form">
+            <div class="form-group">
+                <label for="checker-deploy-id">Deployment ID</label>
+                <div class="input-with-button">
+                    <input type="text" id="checker-deploy-id" placeholder="e.g. 01-deploy-20260522032833-d12e4a">
+                    <button class="btn btn-primary btn-sm" onclick="checkResources()">Check Status</button>
+                </div>
+                <p class="form-hint">Enter the deployment ID you received when you deployed your resources.</p>
+            </div>
+        </div>
+
+        <!-- Results -->
+        <div id="checker-results" style="display:none;">
+            <div class="checker-summary" id="checker-summary"></div>
+
+            <div id="checker-outputs" style="display:none;">
+                <h3>Resource Details</h3>
+                <table class="outputs-table">
+                    <thead><tr><th>Property</th><th>Value</th></tr></thead>
+                    <tbody id="checker-outputs-body"></tbody>
+                </table>
+            </div>
+
+            <div id="checker-resources" style="display:none;">
+                <h3>Resources in Resource Group</h3>
+                <table class="outputs-table">
+                    <thead><tr><th>Name</th><th>Type</th><th>Status</th></tr></thead>
+                    <tbody id="checker-resources-body"></tbody>
+                </table>
+            </div>
+
+            <div class="checker-actions" id="checker-actions" style="display:none;">
+                <a id="checker-logs-link" href="#" class="btn btn-secondary">View Full Logs &rarr;</a>
+                <button class="btn btn-danger" id="checker-destroy-btn" onclick="checkerDestroy()">&#128465; Destroy Resources</button>
+            </div>
+        </div>
+
+        <div class="guide" style="margin-top:2rem;">
+            <h3>How to find your Deployment ID</h3>
+            <ol>
+                <li>It was shown after you clicked <strong>Deploy Now</strong> on the form page</li>
+                <li>It appears at the top of the <strong>Logs</strong> page</li>
+                <li>Format: <code>01-deploy-YYYYMMDDHHMMSS-xxxxxx</code></li>
+            </ol>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const params = new URLSearchParams(window.location.search);
+            const deployId = params.get('id');
+            if (deployId) {
+                document.getElementById('checker-deploy-id').value = deployId;
+                checkResources();
+            }
+        });
+    </script>
+</body>
+</html>
