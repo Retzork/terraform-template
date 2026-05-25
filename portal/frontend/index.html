@@ -14,12 +14,12 @@
         </header>
 
         <div class="search-section">
-            <h3>Track Existing Deployment</h3>
+            <h3>Track Existing Stack</h3>
             <div class="input-with-button">
-                <input type="text" id="search-deploy-id" placeholder="Enter deployment ID (e.g. 01-deploy-20260522...)">
-                <button class="btn btn-secondary btn-sm" onclick="searchDeployment()">View Logs</button>
+                <input type="text" id="search-deploy-id" placeholder="Enter Stack ID (e.g. 01/dfaa40f0-...-757d.SQL-RG)">
+                <button class="btn btn-secondary btn-sm" onclick="searchDeployment()">View Status</button>
             </div>
-            <p class="search-hint">Have a deployment ID? Enter it here to check status and logs.</p>
+            <p class="search-hint">Have a Stack ID? Enter it here to check status, logs, and resources.</p>
         </div>
 
         <div class="nav-links">
@@ -61,7 +61,7 @@
                 <li><strong>Fill the form</strong> &mdash; Customize sizing, credentials, and region</li>
                 <li><strong>Deploy</strong> &mdash; Terraform runs serverlessly in the background</li>
                 <li><strong>Monitor</strong> &mdash; Refresh the log page to see real-time progress</li>
-                <li><strong>Save your Deployment ID</strong> &mdash; Use it to track, manage, or destroy your resources later</li>
+                <li><strong>Save your Stack ID</strong> &mdash; Use it to track, manage, or destroy your resources later</li>
             </ol>
         </div>
     </div>

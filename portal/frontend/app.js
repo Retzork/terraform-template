@@ -62,12 +62,12 @@ function selectTemplate(templateId) {
 }
 
 function searchDeployment() {
-    const deployId = document.getElementById('search-deploy-id').value.trim();
-    if (!deployId) {
-        alert('Please enter a deployment ID');
+    const stackId = document.getElementById('search-deploy-id').value.trim();
+    if (!stackId) {
+        alert('Please enter a Stack ID');
         return;
     }
-    window.location = `logs.html?id=${deployId}`;
+    window.location = `logs.html?id=${encodeURIComponent(stackId)}`;
 }
 
 // ============================================================
@@ -404,8 +404,8 @@ async function submitDeploy(templateId, variableDefs) {
         if (response.ok) {
             document.getElementById('deploy-form').style.display = 'none';
             document.getElementById('deploy-status').style.display = 'block';
-            document.getElementById('deploy-id').textContent = result.deploy_id;
-            document.getElementById('log-link').href = `logs.html?id=${result.deploy_id}`;
+            document.getElementById('deploy-id').textContent = result.stack_id;
+            document.getElementById('log-link').href = `logs.html?id=${encodeURIComponent(result.stack_id)}`;
         } else {
             alert(`Deployment failed: ${result.error}`);
         }
@@ -421,12 +421,15 @@ let logCollapsed = false;
 
 async function refreshLogs() {
     const params = new URLSearchParams(window.location.search);
-    const deployId = params.get('id');
+    const stackId = params.get('id');
 
-    if (!deployId) return;
+    if (!stackId) return;
+
+    // Use flattened stack ID for the API call (replace / with _)
+    const flatId = stackId.replace(/\//g, '_');
 
     try {
-        const response = await fetch(`${API_BASE}/status/${deployId}`);
+        const response = await fetch(`${API_BASE}/status/${flatId}`);
         const data = await response.json();
 
         if (response.ok) {
@@ -453,7 +456,7 @@ async function refreshLogs() {
             }
 
             // Show outputs ABOVE logs when completed (filter out admin_username)
-            if (data.status === 'completed') {
+            if (data.status === 'deployed' || data.status === 'destroyed') {
                 // Parse outputs from log lines (terraform output format: key = "value")
                 const outputs = parseOutputsFromLogs(data.logs);
                 if (Object.keys(outputs).length > 0) {
@@ -483,13 +486,13 @@ async function refreshLogs() {
                 if (refreshNotice) refreshNotice.style.display = 'none';
             }
 
-            // Show destroy button for completed or failed deployments
-            if (data.status === 'completed' || data.status === 'failed') {
+            // Show destroy button for deployed or failed (not for already destroyed)
+            if (data.status === 'deployed' || data.status === 'failed') {
                 document.getElementById('destroy-btn').style.display = 'inline-block';
             }
         } else {
             document.getElementById('log-output').innerHTML =
-                `<div class="log-line error">Deployment not found: ${deployId}</div>`;
+                `<div class="log-line error">Stack not found: ${stackId}</div>`;
         }
     } catch (error) {
         document.getElementById('log-output').innerHTML =
@@ -576,9 +579,9 @@ function escapeHtml(text) {
 // ============================================================
 async function confirmDestroy() {
     const params = new URLSearchParams(window.location.search);
-    const deployId = params.get('id');
+    const stackId = params.get('id');
 
-    if (!confirm(`Are you sure you want to DESTROY all resources from deployment ${deployId}? This cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to DESTROY all resources for ${stackId}? This cannot be undone.`)) {
         return;
     }
 
@@ -590,15 +593,14 @@ async function confirmDestroy() {
         const response = await fetch(`${API_BASE}/destroy`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ deploy_id: deployId })
+            body: JSON.stringify({ stack_id: stackId })
         });
 
         const result = await response.json();
 
         if (response.ok) {
-            alert(`Destroy initiated. Deploy ID: ${result.deploy_id}\nRefresh to see progress.`);
-            // Redirect to the destroy log
-            window.location = `logs.html?id=${result.deploy_id}`;
+            alert(`Destroy initiated. Refresh to see progress.`);
+            refreshLogs();
         } else {
             alert(`Destroy failed: ${result.error}`);
             btn.disabled = false;
@@ -615,12 +617,12 @@ async function confirmDestroy() {
 // Resource Checker Page
 // ============================================================
 async function checkResources() {
-    const deployId = document.getElementById('checker-deploy-id').value.trim();
+    const stackId = document.getElementById('checker-deploy-id').value.trim();
     const resultsEl = document.getElementById('checker-results');
     const summaryEl = document.getElementById('checker-summary');
 
-    if (!deployId) {
-        alert('Please enter a deployment ID');
+    if (!stackId) {
+        alert('Please enter a Stack ID');
         return;
     }
 
@@ -631,12 +633,12 @@ async function checkResources() {
     document.getElementById('checker-actions').style.display = 'none';
 
     try {
-        const response = await fetch(`${API_BASE}/check-resources/${deployId}`);
+        const response = await fetch(`${API_BASE}/check-resources/${stackId.replace(/\//g, '_')}`);
         const data = await response.json();
 
         if (!response.ok || data.error) {
             summaryEl.innerHTML = `
-                <div class="status-error">&#10007; ${data.error || 'Deployment not found'}</div>
+                <div class="status-error">&#10007; ${data.error || 'Stack not found'}</div>
             `;
             return;
         }
@@ -645,10 +647,10 @@ async function checkResources() {
         const statusClass = data.status === 'completed' ? 'status-ok' : data.status === 'failed' ? 'status-error' : 'status-warning';
         summaryEl.innerHTML = `
             <div class="checker-info">
+                <p><strong>Stack ID:</strong> <code>${escapeHtml(data.stack_id)}</code></p>
                 <p><strong>Template:</strong> ${escapeHtml(data.template_name)}</p>
-                <p><strong>Resource Group:</strong> <code>${escapeHtml(data.resource_group_name)}</code></p>
-                <p><strong>Last Deploy Status:</strong> <span class="${statusClass}">${escapeHtml(data.status)}</span></p>
-                <p><strong>Started:</strong> ${escapeHtml(data.started_at || '-')}</p>
+                <p><strong>Last Operation Status:</strong> <span class="${statusClass}">${escapeHtml(data.status)}</span></p>
+                <p><strong>Last Run:</strong> ${escapeHtml(data.started_at || '-')}</p>
                 <p><strong>Resources tracked:</strong> ${data.resource_count}</p>
             </div>
             <div class="checker-disclaimer">
@@ -696,7 +698,7 @@ async function checkResources() {
         // Actions
         const actionsEl = document.getElementById('checker-actions');
         actionsEl.style.display = 'flex';
-        document.getElementById('checker-logs-link').href = `logs.html?id=${deployId}`;
+        document.getElementById('checker-logs-link').href = `logs.html?id=${encodeURIComponent(stackId)}`;
 
     } catch (error) {
         summaryEl.innerHTML = `<div class="status-error">&#10007; Error: ${error.message}</div>`;
@@ -704,9 +706,9 @@ async function checkResources() {
 }
 
 async function checkerDestroy() {
-    const deployId = document.getElementById('checker-deploy-id').value.trim();
+    const stackId = document.getElementById('checker-deploy-id').value.trim();
 
-    if (!confirm(`Are you sure you want to DESTROY all resources from deployment ${deployId}? This cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to DESTROY all resources for ${stackId}? This cannot be undone.`)) {
         return;
     }
 
@@ -718,13 +720,13 @@ async function checkerDestroy() {
         const response = await fetch(`${API_BASE}/destroy`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ deploy_id: deployId })
+            body: JSON.stringify({ stack_id: stackId })
         });
 
         const result = await response.json();
 
         if (response.ok) {
-            window.location = `logs.html?id=${result.deploy_id}`;
+            window.location = `logs.html?id=${encodeURIComponent(stackId)}`;
         } else {
             alert(`Destroy failed: ${result.error}`);
             btn.disabled = false;

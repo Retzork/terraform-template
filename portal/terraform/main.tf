@@ -43,6 +43,12 @@ resource "azurerm_resource_group" "portal" {
   location = var.location
 }
 
+# Resource Group for ACI containers (keeps portal RG clean)
+resource "azurerm_resource_group" "aci" {
+  name     = "${var.resource_group_name}-ACI"
+  location = var.location
+}
+
 # ============================================================
 # Storage Account (logs, state, file share for templates)
 # ============================================================
@@ -146,7 +152,7 @@ resource "azurerm_linux_function_app" "api" {
     "TFSTATE_CONTAINER"        = "tfstate"
     "TEMPLATES_SHARE"          = "templates"
     # ACI config
-    "ACI_RESOURCE_GROUP"  = azurerm_resource_group.portal.name
+    "ACI_RESOURCE_GROUP"  = azurerm_resource_group.aci.name
     "ACI_LOCATION"        = var.location
     "ACI_SUBSCRIPTION_ID" = var.subscription_id
     # Managed Identity for Terraform inside ACI
@@ -165,6 +171,13 @@ resource "azurerm_linux_function_app" "api" {
 # Function App needs Contributor on RG to create/delete ACI containers
 resource "azurerm_role_assignment" "function_contributor_rg" {
   scope                = azurerm_resource_group.portal.id
+  role_definition_name = "Contributor"
+  principal_id         = azurerm_linux_function_app.api.identity[0].principal_id
+}
+
+# Function App needs Contributor on ACI RG to create/delete containers there
+resource "azurerm_role_assignment" "function_contributor_aci_rg" {
+  scope                = azurerm_resource_group.aci.id
   role_definition_name = "Contributor"
   principal_id         = azurerm_linux_function_app.api.identity[0].principal_id
 }

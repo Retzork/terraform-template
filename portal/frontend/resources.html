@@ -11,17 +11,17 @@
         <header>
             <a href="index.html" class="back-link">&larr; Back to templates</a>
             <h1>&#128269; Resource Checker</h1>
-            <p class="subtitle">Check the status of your deployed resources using your Deployment ID</p>
+            <p class="subtitle">Check the status of your deployed resources using your Stack ID</p>
         </header>
 
         <div class="checker-form">
             <div class="form-group">
-                <label for="checker-deploy-id">Deployment ID</label>
+                <label for="checker-deploy-id">Stack ID</label>
                 <div class="input-with-button">
-                    <input type="text" id="checker-deploy-id" placeholder="e.g. 01-deploy-20260522032833-d12e4a">
+                    <input type="text" id="checker-deploy-id" placeholder="e.g. 01/dfaa40f0-0f72-4980-bd34-ccf9162a757d.SQL-RG">
                     <button class="btn btn-primary btn-sm" onclick="checkResources()">Check Status</button>
                 </div>
-                <p class="form-hint">Enter the deployment ID you received when you deployed your resources.</p>
+                <p class="form-hint">Enter the Stack ID you received when you deployed your resources. Format: template/subscription.resourcegroup</p>
             </div>
         </div>
 
@@ -52,11 +52,12 @@
         </div>
 
         <div class="guide" style="margin-top:2rem;">
-            <h3>How to find your Deployment ID</h3>
+            <h3>How to find your Stack ID</h3>
             <ol>
                 <li>It was shown after you clicked <strong>Deploy Now</strong> on the form page</li>
                 <li>It appears at the top of the <strong>Logs</strong> page</li>
-                <li>Format: <code>01-deploy-YYYYMMDDHHMMSS-xxxxxx</code></li>
+                <li>Format: <code>template/subscription-id.resource-group-name</code></li>
+                <li>Example: <code>01/dfaa40f0-0f72-4980-bd34-ccf9162a757d.SQL-RG</code></li>
             </ol>
         </div>
     </div>

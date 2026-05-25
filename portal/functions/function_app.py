@@ -42,6 +42,28 @@ TEMPLATES = {
 }
 
 
+def _make_stack_id(template_id: str, subscription_id: str, resource_group_name: str) -> str:
+    """Build a stable stack ID: {template_id}/{subscription_id}.{resource_group_name}"""
+    return f"{template_id}/{subscription_id}.{resource_group_name}"
+
+
+def _unflatten_stack_id(flat_id: str) -> str:
+    """Convert flat stack ID (used in URLs) back to real stack ID.
+    Flat: 01_dfaa40f0-0f72-4980-bd34-ccf9162a757d.SQL-RG
+    Real: 01/dfaa40f0-0f72-4980-bd34-ccf9162a757d.SQL-RG
+    Only the first _ is the separator (template_id is always 2 chars).
+    """
+    # Template ID is the part before the first _
+    idx = flat_id.find("_")
+    if idx == -1:
+        return flat_id
+    return flat_id[:idx] + "/" + flat_id[idx + 1:]
+
+
+# ============================================================
+# API Endpoints
+# ============================================================
+
 @app.route(route="templates", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def get_templates(req: func.HttpRequest) -> func.HttpResponse:
     """Return available templates."""
@@ -64,12 +86,10 @@ def check_subscription(req: func.HttpRequest) -> func.HttpResponse:
                 status_code=400, mimetype="application/json"
             )
 
-        # Use Function App's managed identity to check subscription
         try:
             credential = DefaultAzureCredential()
             token = credential.get_token("https://management.azure.com/.default")
 
-            # Check subscription access
             url = f"https://management.azure.com/subscriptions/{subscription_id}?api-version=2022-12-01"
             request = urllib.request.Request(url, headers={
                 "Authorization": f"Bearer {token.token}",
@@ -197,32 +217,19 @@ def _trigger_aci(req: func.HttpRequest, action: str = "apply") -> func.HttpRespo
         body = req.get_json()
         template_id = body.get("template_id")
         variables = body.get("variables", {})
-        source_deploy_id = body.get("deploy_id")  # For destroy, reference the original deploy
+        stack_id = body.get("stack_id")  # For destroy, use the stack ID
 
-        # For destroy, get template_id and variables from the original deployment log
-        if action == "destroy" and source_deploy_id:
-            try:
-                from azure.storage.fileshare import ShareFileClient
-                file_client = ShareFileClient(
-                    account_url=f"https://{STORAGE_ACCOUNT_NAME}.file.core.windows.net",
-                    share_name=TEMPLATES_SHARE,
-                    file_path=f"_logs/{source_deploy_id}.json",
-                    credential=STORAGE_ACCOUNT_KEY
+        # For destroy, load variables from the saved stack vars
+        if action == "destroy" and stack_id:
+            stack_vars = _load_stack_vars(stack_id)
+            if stack_vars:
+                template_id = stack_vars.get("template_id", template_id)
+                variables = stack_vars.get("variables", variables)
+            else:
+                return func.HttpResponse(
+                    json.dumps({"error": f"Stack not found: {stack_id}. Cannot destroy."}),
+                    status_code=404, mimetype="application/json"
                 )
-                original_log = json.loads(file_client.download_file().readall())
-                template_id = original_log.get("template_id", template_id)
-                variables = original_log.get("variables", variables)
-            except Exception:
-                # Fallback to blob
-                try:
-                    blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION)
-                    container = blob_service.get_container_client(LOGS_CONTAINER)
-                    blob = container.get_blob_client(f"{source_deploy_id}.json")
-                    original_log = json.loads(blob.download_blob().readall())
-                    template_id = original_log.get("template_id", template_id)
-                    variables = original_log.get("variables", variables)
-                except Exception:
-                    pass
 
         if template_id not in TEMPLATES:
             return func.HttpResponse(
@@ -230,12 +237,27 @@ def _trigger_aci(req: func.HttpRequest, action: str = "apply") -> func.HttpRespo
                 status_code=400, mimetype="application/json"
             )
 
-        action_label = "destroy" if action == "destroy" else "deploy"
-        deploy_id = f"{template_id}-{action_label}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
+        # Derive stack ID from variables (for apply)
+        if not stack_id:
+            subs_id = variables.get("subscription_id", "")
+            rg_name = variables.get("resource_group_name", "")
+            if not subs_id or not rg_name:
+                return func.HttpResponse(
+                    json.dumps({"error": "subscription_id and resource_group_name are required"}),
+                    status_code=400, mimetype="application/json"
+                )
+            stack_id = _make_stack_id(template_id, subs_id, rg_name)
 
-        # Write initial log
+        # Operation ID for this specific run (for ACI naming and tfvars file)
+        operation_id = f"{action}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
+
+        # Save full variables to stack (overwrite on each apply)
+        _save_stack_vars(stack_id, template_id, variables)
+
+        # Write operation log
         log_entry = {
-            "deploy_id": deploy_id,
+            "stack_id": stack_id,
+            "operation_id": operation_id,
             "template_id": template_id,
             "template_name": TEMPLATES[template_id]["name"],
             "action": action,
@@ -244,7 +266,7 @@ def _trigger_aci(req: func.HttpRequest, action: str = "apply") -> func.HttpRespo
             "variables": {k: v for k, v in variables.items() if "password" not in k.lower()},
             "logs": [f"{action.capitalize()} queued. Starting container..."]
         }
-        _write_log(deploy_id, log_entry)
+        _write_stack_log(stack_id, log_entry)
 
         # Generate tfvars content
         tfvars_lines = []
@@ -252,7 +274,6 @@ def _trigger_aci(req: func.HttpRequest, action: str = "apply") -> func.HttpRespo
             if isinstance(value, (int, float)):
                 tfvars_lines.append(f'{key} = {value}')
             elif isinstance(value, dict):
-                # HCL object format
                 obj_lines = [f'{key} = {{']
                 for k, v in value.items():
                     obj_lines.append(f'  {k} = "{v}"')
@@ -262,14 +283,19 @@ def _trigger_aci(req: func.HttpRequest, action: str = "apply") -> func.HttpRespo
                 tfvars_lines.append(f'{key} = "{value}"')
         tfvars_content = "\n".join(tfvars_lines)
 
-        # Upload tfvars to file share so ACI can read it directly (avoids shell escaping issues)
-        _upload_tfvars(deploy_id, tfvars_content)
+        # Upload tfvars to file share (use stack_id-safe name)
+        tfvars_filename = stack_id.replace("/", "_")
+        _upload_tfvars(tfvars_filename, tfvars_content)
 
         # Create ACI container
-        _create_aci(deploy_id, template_id, action)
+        _create_aci(stack_id, tfvars_filename, template_id, action, operation_id)
 
         return func.HttpResponse(
-            json.dumps({"deploy_id": deploy_id, "status": "started"}),
+            json.dumps({
+                "stack_id": stack_id,
+                "operation_id": operation_id,
+                "status": "started"
+            }),
             mimetype="application/json"
         )
 
@@ -281,115 +307,118 @@ def _trigger_aci(req: func.HttpRequest, action: str = "apply") -> func.HttpRespo
         )
 
 
-@app.route(route="status/{deploy_id}", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="status/{stack_id}", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def get_status(req: func.HttpRequest) -> func.HttpResponse:
-    """Get deployment status and logs from file share (ACI writes there) or blob storage."""
-    deploy_id = req.route_params.get("deploy_id")
+    """Get latest operation status for a stack."""
+    stack_id_param = req.route_params.get("stack_id")
 
-    # First try file share (_logs directory) - ACI writes here
+    # The URL uses _ instead of / to avoid route issues
+    # Reconstruct: first _ is the / separator between template_id and subs.rg
+    # Format: {template_id}_{subscription_id}.{resource_group_name}
+    log_filename = stack_id_param  # already flat (uses _)
+    stack_id = _unflatten_stack_id(stack_id_param)
+
+    # Try file share first (_logs directory - ACI writes here)
     try:
         from azure.storage.fileshare import ShareFileClient
         file_client = ShareFileClient(
             account_url=f"https://{STORAGE_ACCOUNT_NAME}.file.core.windows.net",
             share_name=TEMPLATES_SHARE,
-            file_path=f"_logs/{deploy_id}.json",
+            file_path=f"_logs/{log_filename}.json",
             credential=STORAGE_ACCOUNT_KEY
         )
         data = json.loads(file_client.download_file().readall())
         return func.HttpResponse(json.dumps(data), mimetype="application/json")
     except Exception as e:
-        logging.info(f"File share read failed for {deploy_id}: {e}")
+        logging.info(f"File share read failed for {stack_id}: {e}")
 
-    # Fallback to blob storage (initial log written by Function App)
+    # Fallback to blob storage
     try:
         blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION)
         container = blob_service.get_container_client(LOGS_CONTAINER)
-        blob = container.get_blob_client(f"{deploy_id}.json")
+        blob = container.get_blob_client(f"{log_filename}.json")
         data = json.loads(blob.download_blob().readall())
         return func.HttpResponse(json.dumps(data), mimetype="application/json")
     except Exception:
         pass
 
     return func.HttpResponse(
-        json.dumps({"error": f"Deployment not found: {deploy_id}"}),
+        json.dumps({"error": f"Stack not found: {stack_id}"}),
         status_code=404, mimetype="application/json"
     )
 
 
-@app.route(route="check-resources/{deploy_id}", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="check-resources/{stack_id}", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def check_resources(req: func.HttpRequest) -> func.HttpResponse:
-    """Check resources from the Terraform state file using a deployment ID."""
-    deploy_id = req.route_params.get("deploy_id")
+    """Check resources from the Terraform state file using a stack ID."""
+    stack_id_param = req.route_params.get("stack_id")
+    stack_id = _unflatten_stack_id(stack_id_param)
+    log_filename = stack_id_param
 
-    # Step 1: Get deployment log to find template_id and resource_group_name
+    # Parse stack_id: {template_id}/{subscription_id}.{resource_group_name}
+    parts = stack_id.split("/", 1)
+    if len(parts) != 2:
+        return func.HttpResponse(
+            json.dumps({"error": f"Invalid stack ID format: {stack_id}"}),
+            status_code=400, mimetype="application/json"
+        )
+
+    template_id = parts[0]
+    subs_rg = parts[1]  # subscription_id.resource_group_name
+
+    # State key matches what deploy.sh uses
+    state_key = f"{stack_id}.tfstate"
+
+    # Get latest log for status info
+    log_filename = stack_id.replace("/", "_")
     deploy_log = None
-
-    # Try file share first
     try:
         from azure.storage.fileshare import ShareFileClient
         file_client = ShareFileClient(
             account_url=f"https://{STORAGE_ACCOUNT_NAME}.file.core.windows.net",
             share_name=TEMPLATES_SHARE,
-            file_path=f"_logs/{deploy_id}.json",
+            file_path=f"_logs/{log_filename}.json",
             credential=STORAGE_ACCOUNT_KEY
         )
         deploy_log = json.loads(file_client.download_file().readall())
     except Exception:
-        pass
-
-    # Fallback to blob
-    if not deploy_log:
         try:
             blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION)
             container = blob_service.get_container_client(LOGS_CONTAINER)
-            blob = container.get_blob_client(f"{deploy_id}.json")
+            blob = container.get_blob_client(f"{log_filename}.json")
             deploy_log = json.loads(blob.download_blob().readall())
         except Exception:
             pass
 
-    if not deploy_log:
-        return func.HttpResponse(
-            json.dumps({"error": f"Deployment not found: {deploy_id}"}),
-            status_code=404, mimetype="application/json"
-        )
-
-    template_id = deploy_log.get("template_id", "")
-    variables = deploy_log.get("variables", {})
-    rg_name = variables.get("resource_group_name", deploy_id)
-    state_key = f"{template_id}/{rg_name}.tfstate"
-
-    # Step 2: Read the state file from tfstate blob container
+    # Read the state file
     try:
         blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION)
         container = blob_service.get_container_client("tfstate")
         blob = container.get_blob_client(state_key)
         state_data = json.loads(blob.download_blob().readall())
-    except Exception as e:
+    except Exception:
         return func.HttpResponse(
             json.dumps({
-                "deploy_id": deploy_id,
+                "stack_id": stack_id,
                 "template_id": template_id,
                 "template_name": TEMPLATES.get(template_id, {}).get("name", "Unknown"),
-                "resource_group_name": rg_name,
-                "status": deploy_log.get("status", "unknown"),
+                "status": deploy_log.get("status", "unknown") if deploy_log else "unknown",
                 "error": "State file not found. Deployment may still be in progress or was never completed.",
                 "resources": []
             }),
             mimetype="application/json"
         )
 
-    # Step 3: Parse state file to extract resources and outputs
+    # Parse state file
     resources = []
     outputs = {}
 
-    # Extract outputs (filter out admin_username)
     state_outputs = state_data.get("outputs", {})
     for key, val in state_outputs.items():
         if "admin" in key.lower():
             continue
         outputs[key] = val.get("value", val) if isinstance(val, dict) else val
 
-    # Extract resources
     for res in state_data.get("resources", []):
         if res.get("mode") != "managed":
             continue
@@ -402,7 +431,6 @@ def check_resources(req: func.HttpRequest) -> func.HttpResponse:
                 "name": attrs.get("name", res_name),
                 "terraform_name": f"{res_type}.{res_name}",
             }
-            # Add useful attributes based on resource type
             if "location" in attrs:
                 resource_info["location"] = attrs["location"]
             if "size" in attrs:
@@ -419,12 +447,11 @@ def check_resources(req: func.HttpRequest) -> func.HttpResponse:
 
     return func.HttpResponse(
         json.dumps({
-            "deploy_id": deploy_id,
+            "stack_id": stack_id,
             "template_id": template_id,
             "template_name": TEMPLATES.get(template_id, {}).get("name", "Unknown"),
-            "resource_group_name": rg_name,
-            "status": deploy_log.get("status", "unknown"),
-            "started_at": deploy_log.get("started_at", ""),
+            "status": deploy_log.get("status", "unknown") if deploy_log else "unknown",
+            "started_at": deploy_log.get("started_at", "") if deploy_log else "",
             "outputs": outputs,
             "resources": resources,
             "resource_count": len(resources),
@@ -433,19 +460,45 @@ def check_resources(req: func.HttpRequest) -> func.HttpResponse:
     )
 
 
-def _write_log(deploy_id: str, log_data: dict):
-    """Write deployment log to blob storage."""
+# ============================================================
+# Helper Functions
+# ============================================================
+
+def _write_stack_log(stack_id: str, log_data: dict):
+    """Write stack operation log to blob storage."""
     blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION)
     container = blob_service.get_container_client(LOGS_CONTAINER)
-    blob = container.get_blob_client(f"{deploy_id}.json")
+    log_filename = stack_id.replace("/", "_")
+    blob = container.get_blob_client(f"{log_filename}.json")
     blob.upload_blob(json.dumps(log_data, indent=2), overwrite=True)
 
 
-def _upload_tfvars(deploy_id: str, tfvars_content: str):
+def _save_stack_vars(stack_id: str, template_id: str, variables: dict):
+    """Save full variables (including passwords) for a stack. Used for destroy."""
+    blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION)
+    container = blob_service.get_container_client("tfstate")
+    vars_key = f"_vars/{stack_id}.json"
+    data = {"template_id": template_id, "variables": variables, "updated_at": datetime.utcnow().isoformat()}
+    blob = container.get_blob_client(vars_key)
+    blob.upload_blob(json.dumps(data), overwrite=True)
+
+
+def _load_stack_vars(stack_id: str) -> dict:
+    """Load saved variables for a stack."""
+    try:
+        blob_service = BlobServiceClient.from_connection_string(STORAGE_CONNECTION)
+        container = blob_service.get_container_client("tfstate")
+        vars_key = f"_vars/{stack_id}.json"
+        blob = container.get_blob_client(vars_key)
+        return json.loads(blob.download_blob().readall())
+    except Exception:
+        return None
+
+
+def _upload_tfvars(filename: str, tfvars_content: str):
     """Upload tfvars file to the file share so ACI can read it directly."""
     from azure.storage.fileshare import ShareFileClient, ShareDirectoryClient
 
-    # Ensure _tfvars directory exists
     dir_client = ShareDirectoryClient(
         account_url=f"https://{STORAGE_ACCOUNT_NAME}.file.core.windows.net",
         share_name=TEMPLATES_SHARE,
@@ -455,28 +508,31 @@ def _upload_tfvars(deploy_id: str, tfvars_content: str):
     try:
         dir_client.create_directory()
     except Exception:
-        pass  # Directory may already exist
+        pass
 
-    # Upload the tfvars file
     file_client = ShareFileClient(
         account_url=f"https://{STORAGE_ACCOUNT_NAME}.file.core.windows.net",
         share_name=TEMPLATES_SHARE,
-        file_path=f"_tfvars/{deploy_id}.tfvars",
+        file_path=f"_tfvars/{filename}.tfvars",
         credential=STORAGE_ACCOUNT_KEY
     )
     file_client.upload_file(tfvars_content.encode("utf-8"))
 
 
-def _create_aci(deploy_id: str, template_id: str, action: str = "apply"):
+def _create_aci(stack_id: str, tfvars_filename: str, template_id: str, action: str, operation_id: str):
     """Create an Azure Container Instance to run Terraform."""
 
-    # Get token using managed identity
     credential = DefaultAzureCredential()
     token = credential.get_token("https://management.azure.com/.default")
 
-    container_group_name = f"tf-{action}-{deploy_id}"[:63]  # ACI name limit
+    # ACI name: must be DNS-safe, max 63 chars, unique per operation
+    import hashlib
+    stack_hash = hashlib.md5(stack_id.encode()).hexdigest()[:10]
+    container_group_name = f"tf-{action}-{stack_hash}-{operation_id}"[:63]
 
-    # ACI container definition with User-Assigned Managed Identity
+    # Log filename for ACI to write to (same as what status endpoint reads)
+    log_filename = stack_id.replace("/", "_")
+
     container_body = {
         "location": ACI_LOCATION,
         "identity": {
@@ -499,18 +555,23 @@ def _create_aci(deploy_id: str, template_id: str, action: str = "apply"):
                         {"name": "ARM_TENANT_ID", "value": ARM_TENANT_ID},
                         {"name": "ARM_SUBSCRIPTION_ID", "value": ARM_SUBSCRIPTION_ID},
                         {"name": "TF_ACTION", "value": action},
-                        {"name": "DEPLOY_ID", "value": deploy_id},
+                        {"name": "STACK_ID", "value": stack_id},
+                        {"name": "DEPLOY_ID", "value": log_filename},
                         {"name": "TEMPLATE_ID", "value": template_id},
+                        {"name": "TFVARS_FILENAME", "value": tfvars_filename},
                         {"name": "STORAGE_ACCOUNT_NAME", "value": STORAGE_ACCOUNT_NAME},
                         {"name": "STORAGE_ACCOUNT_KEY", "secureValue": STORAGE_ACCOUNT_KEY},
                         {"name": "LOGS_CONTAINER", "value": LOGS_CONTAINER},
+                        {"name": "ACI_CONTAINER_GROUP", "value": container_group_name},
+                        {"name": "ACI_RESOURCE_GROUP", "value": ACI_RESOURCE_GROUP},
+                        {"name": "ACI_SUBSCRIPTION_ID", "value": ACI_SUBSCRIPTION_ID},
                     ],
                     "command": [
                         "/bin/sh", "-c",
                         "apk add --no-cache curl bash && "
                         "cp -r /mnt/templates/$TEMPLATE_ID /work && "
                         "cd /work && "
-                        "cp /mnt/templates/_tfvars/$DEPLOY_ID.tfvars terraform.tfvars && "
+                        "cp /mnt/templates/_tfvars/$TFVARS_FILENAME.tfvars terraform.tfvars && "
                         "sh /mnt/templates/deploy.sh"
                     ],
                     "volumeMounts": [{
@@ -532,7 +593,6 @@ def _create_aci(deploy_id: str, template_id: str, action: str = "apply"):
         }
     }
 
-    # Create ACI via REST API
     url = (
         f"https://management.azure.com/subscriptions/{ACI_SUBSCRIPTION_ID}"
         f"/resourceGroups/{ACI_RESOURCE_GROUP}"
@@ -553,4 +613,7 @@ def _create_aci(deploy_id: str, template_id: str, action: str = "apply"):
     except urllib.error.HTTPError as e:
         error_body = e.read().decode()
         logging.error(f"ACI creation failed: {e.code} - {error_body}")
+        # Check for transitioning error (concurrent operation on same stack)
+        if "ContainerGroupTransitioning" in error_body or "still transitioning" in error_body:
+            raise Exception("An operation is already running for this stack. Please wait for it to finish and try again.")
         raise Exception(f"Failed to create container: {error_body[:200]}")

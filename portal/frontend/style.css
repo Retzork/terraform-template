@@ -246,9 +246,12 @@ h1 {
 
 .badge-running { background: #1da1f2; color: #fff; }
 .badge-completed { background: #17bf63; color: #fff; }
+.badge-deployed { background: #17bf63; color: #fff; }
+.badge-destroyed { background: #794bc4; color: #fff; }
 .badge-failed { background: #e0245e; color: #fff; }
 .badge-queued { background: #794bc4; color: #fff; }
 .badge-timeout { background: #f45d22; color: #fff; }
+.badge-starting { background: #1da1f2; color: #fff; }
 
 .refresh-notice {
     background: #1c2938;

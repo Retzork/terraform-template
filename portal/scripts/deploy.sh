@@ -82,8 +82,9 @@ RG_NAME=$(grep 'resource_group_name' terraform.tfvars | head -1 | sed 's/.*= *"\
 if [ -z "$RG_NAME" ]; then
   RG_NAME="${DEPLOY_ID}"
 fi
-STATE_KEY="${TEMPLATE_ID}/${RG_NAME}.tfstate"
+STATE_KEY="${STACK_ID}.tfstate"
 
+add_line "Stack ID: ${STACK_ID}"
 add_line "State key: ${STATE_KEY}"
 add_line ""
 flush_log "running"
@@ -150,5 +151,25 @@ if [ "$ACTION" = "apply" ]; then
 fi
 
 add_line "=== ${ACTION} Complete ==="
-flush_log "completed"
+
+# Final status: deployed or destroyed (not generic "completed")
+if [ "$ACTION" = "destroy" ]; then
+  flush_log "destroyed"
+else
+  flush_log "deployed"
+fi
+
 echo "=== ${ACTION} Complete ==="
+
+# Self-delete: remove this container group after completion
+if [ -n "$ACI_CONTAINER_GROUP" ] && [ -n "$ACI_RESOURCE_GROUP" ] && [ -n "$ACI_SUBSCRIPTION_ID" ]; then
+  echo "Cleaning up container..."
+  # Get token from managed identity
+  TOKEN=$(curl -s "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&client_id=${ARM_CLIENT_ID}&resource=https://management.azure.com/" -H "Metadata: true" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+  if [ -n "$TOKEN" ]; then
+    curl -s -X DELETE \
+      "https://management.azure.com/subscriptions/${ACI_SUBSCRIPTION_ID}/resourceGroups/${ACI_RESOURCE_GROUP}/providers/Microsoft.ContainerInstance/containerGroups/${ACI_CONTAINER_GROUP}?api-version=2023-05-01" \
+      -H "Authorization: Bearer ${TOKEN}" &
+    # Fire and forget - don't wait for response
+  fi
+fi
